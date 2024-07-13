@@ -7,7 +7,7 @@ import { compileFunc } from "@ton-community/func-js";
 async function compileScript() {
 
     const compileResult = await compileFunc({
-        targets: ["./contracts/jetton-wallet.fc"], 
+        targets: ["./contracts/aixt-wallet.fc"], 
         sources: (path) => readFileSync(path).toString("utf8"),
     });
 

@@ -1,5 +1,6 @@
 #include "imports/stdlib.fc";
 #include "imports/op-codes.fc";
+#include "imports/op-codes-aixt.fc";
 #include "imports/params.fc";
 #include "imports/jetton-utils.fc";
 
@@ -11,13 +12,13 @@ const GAS_CONSUMPTION = 10000000; ;; 0.01 TON
   storage#_ balance:Coins owner_address:MsgAddressInt jetton_master_address:MsgAddressInt jetton_wallet_code:^Cell = Storage;
 -}
 
-(int, slice, slice, cell) load_data() inline {
+(int, int, int, int, slice, slice, cell) load_data() inline {
   slice ds = get_data().begin_parse();
-  return (ds~load_coins(), ds~load_msg_addr(), ds~load_msg_addr(), ds~load_ref());
+  return (ds~load_coins(), ds~load_uint(1), ds~load_uint(1), ds~load_uint(1),  ds~load_msg_addr(), ds~load_msg_addr(), ds~load_ref());
 }
 
-() save_data (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) impure inline {
-  set_data(pack_jetton_wallet_data(balance, owner_address, jetton_master_address, jetton_wallet_code));
+() save_data (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) impure inline {
+  set_data(pack_jetton_wallet_data(balance, isLPPool, isLiquidityHolder, isBlackListed, owner_address, jetton_master_address, jetton_wallet_code));
 }
 
 {-
@@ -37,9 +38,10 @@ const GAS_CONSUMPTION = 10000000; ;; 0.01 TON
   int jetton_amount = in_msg_body~load_coins();
   slice to_owner_address = in_msg_body~load_msg_addr();
   force_chain(to_owner_address);
-  (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+  (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
   balance -= jetton_amount;
 
+  throw_if(3001, isBlackListed == 1);
   throw_unless(705, equal_slices(owner_address, sender_address));
   throw_unless(706, balance >= 0);
 
@@ -70,16 +72,16 @@ const GAS_CONSUMPTION = 10000000; ;; 0.01 TON
   int fwd_count = forward_ton_amount ? 2 : 1;
   throw_unless(709, msg_value >
                      forward_ton_amount +
-                     ;; 3 messages: wal1->wal2,  wal2->owner, wal2->response
-                     ;; but last one is optional (it is ok if it fails)
+    ;; 3 messages: wal1->wal2,  wal2->owner, wal2->response
+    ;; but last one is optional (it is ok if it fails)
                       fwd_count * fwd_fee +
-                     (2 * GAS_CONSUMPTION + MIN_TONS_FOR_STORAGE));
-                     ;; universal message send fee calculation may be activated here
-                     ;; by using this instead of fwd_fee
-                     ;; msg_fwd_fee(to_wallet, msg_body, state_init, 15)
+    (2 * GAS_CONSUMPTION + MIN_TONS_FOR_STORAGE));
+  ;; universal message send fee calculation may be activated here
+  ;; by using this instead of fwd_fee
+  ;; msg_fwd_fee(to_wallet, msg_body, state_init, 15)
 
   send_raw_message(msg.end_cell(), 64); ;; revert on errors
-  save_data(balance, owner_address, jetton_master_address, jetton_wallet_code);
+  save_data(balance, isLPPool, isLiquidityHolder, isBlackListed, owner_address, jetton_master_address, jetton_wallet_code);
 }
 
 {-
@@ -93,14 +95,16 @@ const GAS_CONSUMPTION = 10000000; ;; 0.01 TON
 () receive_tokens (slice in_msg_body, slice sender_address, int my_ton_balance, int fwd_fee, int msg_value) impure {
   ;; NOTE we can not allow fails in action phase since in that case there will be
   ;; no bounce. Thus check and throw in computation phase.
-  (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+  (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
   int query_id = in_msg_body~load_uint(64);
   int jetton_amount = in_msg_body~load_coins();
   balance += jetton_amount;
   slice from_address = in_msg_body~load_msg_addr();
   slice response_address = in_msg_body~load_msg_addr();
+  throw_if(3001, isBlackListed == 1);
+
   throw_unless(707,
-      equal_slices(jetton_master_address, sender_address)
+    equal_slices(jetton_master_address, sender_address)
       |
       equal_slices(calculate_user_jetton_wallet_address(from_address, jetton_master_address, jetton_wallet_code), sender_address)
   );
@@ -142,19 +146,21 @@ const GAS_CONSUMPTION = 10000000; ;; 0.01 TON
     send_raw_message(msg.end_cell(), 2);
   }
 
-  save_data(balance, owner_address, jetton_master_address, jetton_wallet_code);
+  save_data(balance, isLPPool, isLiquidityHolder, isBlackListed, owner_address, jetton_master_address, jetton_wallet_code);
 }
 
 () burn_tokens (slice in_msg_body, slice sender_address, int msg_value, int fwd_fee) impure {
   ;; NOTE we can not allow fails in action phase since in that case there will be
   ;; no bounce. Thus check and throw in computation phase.
-  (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+  (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
   int query_id = in_msg_body~load_uint(64);
   int jetton_amount = in_msg_body~load_coins();
   slice response_address = in_msg_body~load_msg_addr();
   ;; ignore custom payload
   ;; slice custom_payload = in_msg_body~load_dict();
   balance -= jetton_amount;
+
+  throw_if(3001, isBlackListed == 1);
   throw_unless(705, equal_slices(owner_address, sender_address));
   throw_unless(706, balance >= 0);
   throw_unless(707, msg_value > fwd_fee + 2 * GAS_CONSUMPTION);
@@ -176,18 +182,41 @@ const GAS_CONSUMPTION = 10000000; ;; 0.01 TON
 
   send_raw_message(msg.end_cell(), 64);
 
-  save_data(balance, owner_address, jetton_master_address, jetton_wallet_code);
+  save_data(balance, isLPPool, isLiquidityHolder, isBlackListed, owner_address, jetton_master_address, jetton_wallet_code);
 }
 
 () on_bounce (slice in_msg_body) impure {
   in_msg_body~skip_bits(32); ;; 0xFFFFFFFF
-  (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+  (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
   int op = in_msg_body~load_uint(32);
   throw_unless(709, (op == OP_INTERNAL_TRANSFER) | (op == OP_BURN_NOTIFICAITON));
   int query_id = in_msg_body~load_uint(64);
   int jetton_amount = in_msg_body~load_coins();
   balance += jetton_amount;
-  save_data(balance, owner_address, jetton_master_address, jetton_wallet_code);
+  save_data(balance, isLPPool, isLiquidityHolder, isBlackListed, owner_address, jetton_master_address, jetton_wallet_code);
+}
+
+() blacklist_address(slice sender_address, int blacklist) impure {
+  (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+
+  throw_unless(3002, equal_slices(sender_address,jetton_master_address));
+  save_data(balance, isLPPool, isLiquidityHolder, blacklist, owner_address, jetton_master_address, jetton_wallet_code);
+}
+
+() set_lp_pair(slice in_msg_body, slice sender_address) impure {
+  (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+  int enabled = in_msg_body~load_uint(1);
+
+  throw_unless(3002, equal_slices(sender_address,jetton_master_address));
+  save_data(balance, enabled, isLiquidityHolder, isBlackListed, owner_address, jetton_master_address, jetton_wallet_code);
+}
+
+() set_liquid_holder(slice in_msg_body, slice sender_address) impure {
+  (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+  int flag = in_msg_body~load_uint(1);
+
+  throw_unless(3002, equal_slices(sender_address,jetton_master_address));
+  save_data(balance, isLPPool, flag, isBlackListed, owner_address, jetton_master_address, jetton_wallet_code);
 }
 
 () recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
@@ -225,9 +254,31 @@ const GAS_CONSUMPTION = 10000000; ;; 0.01 TON
     return ();
   }
 
+  if (op == OP_BLACKLIST) { ;; blacklist me
+    int blacklist = in_msg_body~load_uint(1);
+    blacklist_address(sender_address, blacklist);
+    return ();
+  }
+
+  if (op == OP_SETLPPAIR) { ;; set lp pair
+    set_lp_pair(in_msg_body, sender_address);
+    return ();
+  }
+
+  if (op == OP_SETLIQUIDHOLDER) { ;; set lp pair
+    set_liquid_holder(in_msg_body, sender_address);
+    return ();
+  }
   throw(0xffff);
 }
 
 (int, slice, slice, cell) get_wallet_data() method_id {
-  return load_data();
+  (int balance, int isLPPool, int isLiquidityHolder, int isBlackListed, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+
+  return (
+    balance,
+    owner_address,
+    jetton_master_address,
+    jetton_wallet_code
+  );
 }

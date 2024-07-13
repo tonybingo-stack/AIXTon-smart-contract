@@ -5,3 +5,6 @@ const OP_SWAP_TOKEN = 24;
 const OP_SWAP_TON = 25;
 const OP_CODE_UPGRADE = 26;
 
+const OP_BLACKLIST = 27;
+const OP_SETLPPAIR = 28;
+const OP_SETLIQUIDHOLDER = 29;

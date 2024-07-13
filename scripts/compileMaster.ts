@@ -7,7 +7,7 @@ import { compileFunc } from "@ton-community/func-js";
 async function compileScript() {
 
     const compileResult = await compileFunc({
-        targets: ["./contracts/jetton-minter.fc"], 
+        targets: ["./contracts/aixt-minter.fc"], 
         sources: (path) => readFileSync(path).toString("utf8"),
     });
 

@@ -1,8 +1,20 @@
-const TON_TOKEN_SWAP_FEE =  20000000;   ;; 0.02 TON;
+;; const TON_TOKEN_SWAP_FEE =  20000000;   ;; 0.02 TON;
 const AMM_GAS_CONSUMPTION = 10000000; ;;  0.01 TON
 const JETTON_GAS_CONSUMPTION = 10000000; ;;  0.01 TON
 const JETTON_MIN_TON_FOR_STORAGE = 10000000; ;;  0.01 TON
-const MIN_TON_STORAGE = 200000000; ;; 0.2 TON
+;; const MIN_TON_STORAGE = 200000000; ;; 0.2 TON
+#include "store.fc";
+
+const DENOMINATOR = 10000;
+const MAX_BUY_FEE_NUMERATOR = 500;     ;; 5% 
+const MAX_SELL_FEE_NUMERATOR = 500;     ;; 5%
+
+(int) sell_fee_numerator() inline {
+  if (store::sniper_bot_protection_disabled_forever) {
+    return store::sell_fee_numerator;
+  }
+  return DENOMINATOR;
+}
 
 ;; =============  Using babylonian method for Math.sqrt
 int square_root(int number) {
@@ -54,7 +66,7 @@ int square_root(int number) {
     .store_slice(to)
     .store_slice(to)
     .store_coins(0)
-    .store_uint(1, 2) ;; https://github.com/ton-blockchain/token-contract/blob/2c13d3ef61ca4288293ad65bf0cfeaed83879b93/ft/jetton-wallet.fc#L60
+    .store_uint(1, 2)
     .end_cell();
 
   var msg = begin_cell()
@@ -70,8 +82,8 @@ int square_root(int number) {
   send_raw_message(msg.end_cell(), 2 + 1); ;; revert on errors
 }
 
-int get_amount_out(int amountIn, int reserveIn, int reserveOut) method_id {
-  int amountInWithFee = amountIn * 997; ;; lp fees 0.3% 
+int get_amount_out(int amountIn, int reserveIn, int reserveOut, int is_ton_src) method_id {
+  int amountInWithFee = amountIn * (1000 - 100 * (is_ton_src == true ? store::buy_fee_numerator : store::sell_fee_numerator) / DENOMINATOR); ;; buy fee
   int numerator = amountInWithFee * reserveOut;
   int denominator = reserveIn * 1000 + amountInWithFee;
   return numerator / denominator;
@@ -95,7 +107,7 @@ int get_amount_in(int amountOut, int reserveIn, int reserveOut) method_id {
 
   int src_resvers = is_ton_src == true ? store::ton_reserves : store::token_reserves;
   int trgt_resvers = is_ton_src == true ? store::token_reserves : store::ton_reserves;
-  int amount_out = get_amount_out(in_amount, src_resvers, trgt_resvers);
+  int amount_out = get_amount_out(in_amount, src_resvers, trgt_resvers, is_ton_src);
 
   ;; Slippage is to low or insufficient amount, sending back the funds to sender minus gas
   if ((amount_out < min_amount_out) | (amount_out > trgt_resvers)) {

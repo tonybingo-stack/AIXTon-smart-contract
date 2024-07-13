@@ -17,6 +17,9 @@ const ADD_LIQUIDTY_GAS_CONSUMPTION = 4000000; ;; 0.04
 const ADD_LIQUIDTY_DUST = 100000000;     ;; 0.1 
 const zero_address = "EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c"a;
 const MAX_SLIPAGE = 99; ;; TODO
+
+const MAX_BUY_FEE_NUMERATOR = 500;     ;; 5% 
+const MAX_SELL_FEE_NUMERATOR = 500;     ;; 5%
 #pragma version >=0.2.0;
 
 () mint_tokens(slice to_address, int query_id, int amount, int ton_leftovers) impure {
@@ -184,6 +187,75 @@ const MAX_SLIPAGE = 99; ;; TODO
     return ();
 }
 
+() set_treasury (slice treasury_address) impure {
+    throw_if(ERROR::EMPTY_ADDRESS, treasury_address.slice_empty?());
+    store::treasury = treasury_address;
+    save_data();
+}
+() set_lock_fees_forever () impure {
+    throw_if(ERROR::LOCK_FEES_ALREADY_SET, store::fees_are_locked_forever == 1);
+    store::fees_are_locked_forever = 1;
+    save_data();
+}
+() restrict_blacklist_disabled_forever () impure {
+    throw_if(ERROR::BLACKLIST_ADD_RESTRICTED_ALREADY, store::blacklist_add_restricted_forever == 1);
+    store::blacklist_add_restricted_forever = 1;
+    save_data();
+}
+() set_sell_fee_numerator (int fee) impure {
+    throw_if(ERROR::FEES_ARE_LOCKED_FOREVER, store::fees_are_locked_forever == 1);
+    throw_if(ERROR::EXCEED_MAX_SELL_FEE, fee > store::sell_fee_numerator);
+    store::sell_fee_numerator = fee;
+    save_data();
+}
+() set_buy_fee_numerator (int fee) impure {
+    throw_if(ERROR::FEES_ARE_LOCKED_FOREVER, store::fees_are_locked_forever == 1);
+    throw_if(ERROR::EXCEED_MAX_BUY_FEE, fee > store::buy_fee_numerator);
+    store::buy_fee_numerator = fee;
+    save_data();
+}
+
+() disable_sniper_bot_protection_forever () impure {
+    throw_if(ERROR::SNIPER_ALREADY_DISABLED, store::sniper_bot_protection_disabled_forever == 1);
+    store::sniper_bot_protection_disabled_forever = 1;
+    save_data();
+}
+
+() blacklist_adddress (slice address, int isBlacklisted) impure {
+    throw_if(ERROR::BLACKLIST_ADD_RESTRICTED_FOREVER, store::blacklist_add_restricted_forever == 1);
+
+    var msg = begin_cell()
+        .store_uint(0x10, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
+        .store_slice(address)
+        .store_coins(0)
+        .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+        .store_uint(OP_BLACKLIST, 32)
+        .store_uint(isBlacklisted, 1);
+    send_raw_message(msg.end_cell(), 2 + 64);
+}
+
+() set_lp_pair (slice address, int enabled) impure {
+    var msg = begin_cell()
+        .store_uint(0x10, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
+        .store_slice(address)
+        .store_coins(0)
+        .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+        .store_uint(OP_SETLPPAIR, 32)
+        .store_uint(enabled, 1);
+    send_raw_message(msg.end_cell(), 2 + 64);
+}
+
+() set_liquid_holder (slice address, int flag) impure {
+    var msg = begin_cell()
+        .store_uint(0x10, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 011000
+        .store_slice(address)
+        .store_coins(0)
+        .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+        .store_uint(OP_SETLIQUIDHOLDER, 32)
+        .store_uint(flag, 1);
+    send_raw_message(msg.end_cell(), 2 + 64);
+}
+
 () recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
     if (in_msg_body.slice_empty?()) { ;; ignore empty messages
         return ();
@@ -207,7 +279,6 @@ const MAX_SLIPAGE = 99; ;; TODO
     load_data();
   
     if (op == OP_BURN_NOTIFICAITON) {
-
         int jetton_amount = in_msg_body ~load_coins();
         slice from_address = in_msg_body ~load_msg_addr();
 
@@ -223,7 +294,6 @@ const MAX_SLIPAGE = 99; ;; TODO
     }
 
     if (op == OP_SWAP_TON ) {
-      
         int ton_to_swap = in_msg_body~load_coins();
         int min_amount_out = in_msg_body~load_coins();
         throw_if(ERROR::INSFUCIENT_FUNDS, min_amount_out > store::token_reserves); 
@@ -306,6 +376,54 @@ const MAX_SLIPAGE = 99; ;; TODO
         return ();
     }
 
+    if (op == OP_SETTREASURY & equal_slices(sender, store::admin) ) {
+        slice treasury_address = in_msg_body~load_msg_addr();
+        set_treasury(treasury_address);
+        return ();
+    }
+    if (op == OP_LOCKFEESFOREVER & equal_slices(sender, store::admin) ) {
+        set_lock_fees_forever();
+        return ();
+    }
+    if (op == OP_RESTRICTBLACKLISTADDFOREVER & equal_slices(sender, store::admin) ) {
+        restrict_blacklist_disabled_forever();
+        return ();
+    }
+    if (op == OP_SETSELLFEENUMERATOR & equal_slices(sender, store::admin) ) {
+        int fee = in_msg_body~load_uint(32);
+        set_sell_fee_numerator(fee);
+        return ();
+    }
+    if (op == OP_SETBUYFEENUMERATOR & equal_slices(sender, store::admin) ) {
+        int fee = in_msg_body~load_uint(32);
+        set_buy_fee_numerator(fee);
+        return ();
+    }
+    if (op == OP_DISABLESNIPERBOTPROTECTIONFOREVER & equal_slices(sender, store::admin) ) {
+        disable_sniper_bot_protection_forever();
+        return ();
+    }
+    if (op == OP_BLACKLIST_ADDRESS & equal_slices(sender, store::admin) ) {
+        slice address = in_msg_body~load_msg_addr();
+        int isBlacklisted = in_msg_body~load_uint(1);
+
+        blacklist_adddress(address, isBlacklisted);
+        return ();
+    }
+    if (op == OP_SET_LPPAIR & equal_slices(sender, store::admin) ) {
+        slice address = in_msg_body~load_msg_addr();
+        int enabled = in_msg_body~load_uint(1);
+
+        set_lp_pair(address, enabled);
+        return ();
+    }
+    if (op == OP_SET_LIQUID_HOLDER & equal_slices(sender, store::admin) ) {
+        slice address = in_msg_body~load_msg_addr();
+        int flag = in_msg_body~load_uint(1);
+
+        set_liquid_holder(address, flag);
+        return ();
+    }
 
     throw(0xffff);
 }
