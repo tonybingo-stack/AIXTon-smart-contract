@@ -3,28 +3,8 @@
 #include "imports/params.fc";
 #include "imports/jetton-utils.fc";
 
-;; Jetton Wallet Smart Contract
-
-{-
-
-NOTE that this tokens can be transferred within the same workchain.
-
-This is suitable for most tokens, if you need tokens transferable between workchains there are two solutions:
-
-1) use more expensive but universal function to calculate message forward fee for arbitrary destination (see `misc/forward-fee-calc.cs`)
-
-2) use token holder proxies in target workchain (that way even 'non-universal' token can be used from any workchain)
-
--}
-
-int min_tons_for_storage() asm "10000000 PUSHINT"; ;; 0.01 TON
-;; Note that 2 * gas_consumptions is expected to be able to cover fees on both wallets (sender and receiver)
-;; and also constant fees on inter-wallet interaction, in particular fwd fee on state_init transfer
-;; that means that you need to reconsider this fee when:
-;; a) jetton logic become more gas-heavy
-;; b) jetton-wallet code (sent with inter-wallet message) become larger or smaller
-;; c) global fee changes / different workchain
-int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
+const MIN_TONS_FOR_STORAGE = 10000000; ;; 0.01 TON
+const GAS_CONSUMPTION = 10000000; ;; 0.01 TON
 
 {-
   Storage
@@ -77,7 +57,7 @@ int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
     .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
     .store_ref(state_init);
   var msg_body = begin_cell()
-    .store_uint(op::internal_transfer(), 32)
+    .store_uint(OP_INTERNAL_TRANSFER, 32)
     .store_uint(query_id, 64)
     .store_coins(jetton_amount)
     .store_slice(owner_address)
@@ -92,8 +72,8 @@ int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
                      forward_ton_amount +
                      ;; 3 messages: wal1->wal2,  wal2->owner, wal2->response
                      ;; but last one is optional (it is ok if it fails)
-                     fwd_count * fwd_fee +
-                     (2 * gas_consumption() + min_tons_for_storage()));
+                      fwd_count * fwd_fee +
+                     (2 * GAS_CONSUMPTION + MIN_TONS_FOR_STORAGE));
                      ;; universal message send fee calculation may be activated here
                      ;; by using this instead of fwd_fee
                      ;; msg_fwd_fee(to_wallet, msg_body, state_init, 15)
@@ -127,14 +107,14 @@ int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
   int forward_ton_amount = in_msg_body~load_coins();
 
   int ton_balance_before_msg = my_ton_balance - msg_value;
-  int storage_fee = min_tons_for_storage() - min(ton_balance_before_msg, min_tons_for_storage());
-  msg_value -= (storage_fee + gas_consumption());
+  int storage_fee = MIN_TONS_FOR_STORAGE - min(ton_balance_before_msg, MIN_TONS_FOR_STORAGE);
+  msg_value -= (storage_fee + GAS_CONSUMPTION);
   if(forward_ton_amount) {
     msg_value -= (forward_ton_amount + fwd_fee);
     slice either_forward_payload = in_msg_body;
 
     var msg_body = begin_cell()
-        .store_uint(op::transfer_notification(), 32)
+        .store_uint(OP_TRANSFER_NOTIFICATION, 32)
         .store_uint(query_id, 64)
         .store_coins(jetton_amount)
         .store_slice(from_address)
@@ -142,7 +122,7 @@ int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
         .end_cell();
 
     var msg = begin_cell()
-      .store_uint(0x10, 6) ;; we should not bounce here cause receiver can have uninitialized contract
+      .store_uint(0x18, 6) ;; we should not bounce here cause receiver can have uninitialized contract
       .store_slice(owner_address)
       .store_coins(forward_ton_amount)
       .store_uint(1, 1 + 4 + 4 + 64 + 32 + 1 + 1)
@@ -157,7 +137,7 @@ int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
       .store_slice(response_address)
       .store_coins(msg_value)
       .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-      .store_uint(op::excesses(), 32)
+      .store_uint(OP_EXCESSES, 32)
       .store_uint(query_id, 64);
     send_raw_message(msg.end_cell(), 2);
   }
@@ -177,10 +157,10 @@ int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
   balance -= jetton_amount;
   throw_unless(705, equal_slices(owner_address, sender_address));
   throw_unless(706, balance >= 0);
-  throw_unless(707, msg_value > fwd_fee + 2 * gas_consumption());
+  throw_unless(707, msg_value > fwd_fee + 2 * GAS_CONSUMPTION);
 
   var msg_body = begin_cell()
-      .store_uint(op::burn_notification(), 32)
+      .store_uint(OP_BURN_NOTIFICAITON, 32)
       .store_uint(query_id, 64)
       .store_coins(jetton_amount)
       .store_slice(owner_address)
@@ -203,7 +183,7 @@ int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
   in_msg_body~skip_bits(32); ;; 0xFFFFFFFF
   (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
   int op = in_msg_body~load_uint(32);
-  throw_unless(709, (op == op::internal_transfer()) | (op == op::burn_notification()));
+  throw_unless(709, (op == OP_INTERNAL_TRANSFER) | (op == OP_BURN_NOTIFICAITON));
   int query_id = in_msg_body~load_uint(64);
   int jetton_amount = in_msg_body~load_coins();
   balance += jetton_amount;
@@ -226,21 +206,21 @@ int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
   cs~load_coins(); ;; skip value
   cs~skip_bits(1); ;; skip extracurrency collection
   cs~load_coins(); ;; skip ihr_fee
-  int fwd_fee = muldiv(cs~load_coins(), 3, 2); ;; we use message fwd_fee for estimation of forward_payload costs
+  int fwd_fee = cs~load_coins(); ;; we use message fwd_fee for estimation of forward_payload costs
 
   int op = in_msg_body~load_uint(32);
 
-  if (op == op::transfer()) { ;; outgoing transfer
+  if (op == OP_TRANSFER) { ;; outgoing transfer
     send_tokens(in_msg_body, sender_address, msg_value, fwd_fee);
     return ();
   }
 
-  if (op == op::internal_transfer()) { ;; incoming transfer
+  if (op == OP_INTERNAL_TRANSFER) { ;; incoming transfer
     receive_tokens(in_msg_body, sender_address, my_balance, fwd_fee, msg_value);
     return ();
   }
 
-  if (op == op::burn()) { ;; burn
+  if (op == OP_BURN) { ;; burn
     burn_tokens(in_msg_body, sender_address, msg_value, fwd_fee);
     return ();
   }
